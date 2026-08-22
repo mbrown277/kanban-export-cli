@@ -1,0 +1,17 @@
+{
+  "name": "kanban-export-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stream large kanban board JSON exports into CSV without loading the whole file into memory.",
+  "type": "module",
+  "bin": {
+    "kanban-export-cli": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "license": "MIT"
+}
