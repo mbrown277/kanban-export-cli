@@ -21,11 +21,19 @@ node dist/cli.js my-board.json > cards.csv
 ```
 
 ```csv
-id,name,closed,due
-5f2a1b3c9d8e7f0012345678,Write the RFC,false,
-5f2a1b3c9d8e7f0012345679,Ship v1,false,2026-09-01T00:00:00.000Z
-5f2a1b3c9d8e7f001234567a,Old idea nobody picked up,true,
+id,name,list,closed,due
+5f2a1b3c9d8e7f0012345678,Write the RFC,Doing,false,
+5f2a1b3c9d8e7f0012345679,Ship v1,Done,false,2026-09-01T00:00:00.000Z
+5f2a1b3c9d8e7f001234567a,Old idea nobody picked up,Backlog,true,
 ```
+
+The `list` column is the resolved list name, not the raw `idList` reference
+Trello puts on each card. Cross-referencing it against the `lists` array
+means reading the export file a second time before streaming `cards` — the
+`lists` array itself is small even on old boards, so it's read fully into
+memory, but `cards` is still streamed one element at a time as before. If a
+card's `idList` doesn't match any list in the export (a list that's since
+been deleted, say), the raw id is used instead so the row still round-trips.
 
 To pull a different top-level array (say, to sanity-check the raw action
 log) instead of cards:
@@ -34,10 +42,11 @@ log) instead of cards:
 node dist/cli.js my-board.json --array=actions > actions.csv
 ```
 
-Right now only `cards` is mapped to real CSV columns (`id`, `name`,
+Right now only `cards` is mapped to real CSV columns (`id`, `name`, `list`,
 `closed`, `due`); pointing `--array` at anything else will scan and parse
 correctly but won't emit rows for elements that don't have string `id` and
-`name` fields.
+`name` fields, and the `list` column will be blank since list resolution
+only runs when `--array` is `cards` (the default).
 
 ## How it avoids loading the whole file
 
@@ -70,5 +79,5 @@ node dist/cli.js my-board.json > cards.csv
 - Array elements that aren't objects or arrays (bare strings, numbers,
   booleans) are skipped rather than emitted.
 - Only `cards` has a real CSV mapping today.
-- List names aren't resolved yet — the CSV doesn't even include the raw
-  `idList` reference, let alone a name joined against the `lists` array.
+- The card-move history in `actions` isn't surfaced — a card's CSV row
+  reflects its current list, not the lists it passed through.
