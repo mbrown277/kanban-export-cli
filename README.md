@@ -21,10 +21,10 @@ node dist/cli.js my-board.json > cards.csv
 ```
 
 ```csv
-id,name,list,closed,due
-5f2a1b3c9d8e7f0012345678,Write the RFC,Doing,false,
-5f2a1b3c9d8e7f0012345679,Ship v1,Done,false,2026-09-01T00:00:00.000Z
-5f2a1b3c9d8e7f001234567a,Old idea nobody picked up,Backlog,true,
+id,name,list,closed,due,moves,lastMovedAt
+5f2a1b3c9d8e7f0012345678,Write the RFC,Doing,false,,2,2026-08-20T14:03:11.000Z
+5f2a1b3c9d8e7f0012345679,Ship v1,Done,false,2026-09-01T00:00:00.000Z,4,2026-09-01T09:12:45.000Z
+5f2a1b3c9d8e7f001234567a,Old idea nobody picked up,Backlog,true,,0,
 ```
 
 The `list` column is the resolved list name, not the raw `idList` reference
@@ -35,6 +35,17 @@ memory, but `cards` is still streamed one element at a time as before. If a
 card's `idList` doesn't match any list in the export (a list that's since
 been deleted, say), the raw id is used instead so the row still round-trips.
 
+The `moves` and `lastMovedAt` columns come from the `actions` array — every
+time a card's list changes, Trello records an `updateCard` action with an
+`old.idList` field. `moves` is how many such actions exist for that card,
+and `lastMovedAt` is the timestamp of the most recent one; a card that's
+never changed lists gets `0` and an empty timestamp. This is a third
+streamed pass over the file (after `lists` and before `cards`), but it only
+keeps a count and a timestamp per card, not the actions themselves, so
+memory use stays proportional to the number of cards rather than the number
+of actions — even though `actions` is typically the largest array in the
+export by far.
+
 To pull a different top-level array (say, to sanity-check the raw action
 log) instead of cards:
 
@@ -43,10 +54,11 @@ node dist/cli.js my-board.json --array=actions > actions.csv
 ```
 
 Right now only `cards` is mapped to real CSV columns (`id`, `name`, `list`,
-`closed`, `due`); pointing `--array` at anything else will scan and parse
-correctly but won't emit rows for elements that don't have string `id` and
-`name` fields, and the `list` column will be blank since list resolution
-only runs when `--array` is `cards` (the default).
+`closed`, `due`, `moves`, `lastMovedAt`); pointing `--array` at anything else
+will scan and parse correctly but won't emit rows for elements that don't
+have string `id` and `name` fields, and the `list`, `moves`, and
+`lastMovedAt` columns will be blank/zero since list resolution and move
+history only run when `--array` is `cards` (the default).
 
 ## How it avoids loading the whole file
 
@@ -79,5 +91,6 @@ node dist/cli.js my-board.json > cards.csv
 - Array elements that aren't objects or arrays (bare strings, numbers,
   booleans) are skipped rather than emitted.
 - Only `cards` has a real CSV mapping today.
-- The card-move history in `actions` isn't surfaced — a card's CSV row
-  reflects its current list, not the lists it passed through.
+- Move history only counts list changes (`updateCard` actions with an
+  `old.idList`); it doesn't record which lists a card passed through, only
+  how many times it moved and when it last did.

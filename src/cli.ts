@@ -79,21 +79,99 @@ async function loadListNames(inputPath: string): Promise<Map<string, string>> {
   return listNames;
 }
 
+interface TrelloAction {
+  type: string;
+  date?: string;
+  data?: {
+    card?: { id?: string };
+    old?: { idList?: string };
+  };
+}
+
+function isCardMoveAction(value: unknown): value is TrelloAction & {
+  date: string;
+  data: { card: { id: string }; old: { idList: string } };
+} {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (record.type !== 'updateCard' || typeof record.date !== 'string') return false;
+  const data = record.data as Record<string, unknown> | undefined;
+  if (typeof data !== 'object' || data === null) return false;
+  const card = data.card as Record<string, unknown> | undefined;
+  const old = data.old as Record<string, unknown> | undefined;
+  return (
+    typeof card === 'object' &&
+    card !== null &&
+    typeof card.id === 'string' &&
+    typeof old === 'object' &&
+    old !== null &&
+    typeof old.idList === 'string'
+  );
+}
+
+interface CardMoveHistory {
+  moves: number;
+  lastMovedAt: string;
+}
+
+// Every list change a card ever went through is recorded as an "updateCard"
+// action with an "old.idList", so the "actions" array (which dwarfs "cards"
+// on any board with real history) is the only source for this. Streaming it
+// and keeping only a per-card count and latest timestamp means memory use
+// stays proportional to the number of distinct cards, not the number of
+// actions, which is the same trade the "cards" export itself makes.
+async function loadCardMoveHistory(inputPath: string): Promise<Map<string, CardMoveHistory>> {
+  const scanner = new JsonArrayScanner('actions');
+  const input = createReadStream(inputPath, { encoding: 'utf8' });
+  const history = new Map<string, CardMoveHistory>();
+
+  for await (const chunk of input) {
+    for (const element of scanner.feed(chunk)) {
+      if (!isCardMoveAction(element)) continue;
+      const cardId = element.data.card.id;
+      const existing = history.get(cardId);
+      if (existing === undefined) {
+        history.set(cardId, { moves: 1, lastMovedAt: element.date });
+      } else {
+        existing.moves++;
+        if (element.date > existing.lastMovedAt) existing.lastMovedAt = element.date;
+      }
+    }
+    if (scanner.done) {
+      input.destroy();
+      break;
+    }
+  }
+
+  return history;
+}
+
 async function main(): Promise<void> {
   const { inputPath, arrayField } = parseArgs(process.argv.slice(2));
   const listNames = arrayField === 'cards' ? await loadListNames(inputPath) : new Map<string, string>();
+  const moveHistory =
+    arrayField === 'cards' ? await loadCardMoveHistory(inputPath) : new Map<string, CardMoveHistory>();
   const scanner = new JsonArrayScanner(arrayField);
   const input = createReadStream(inputPath, { encoding: 'utf8' });
 
-  process.stdout.write(csvRow(['id', 'name', 'list', 'closed', 'due']));
+  process.stdout.write(csvRow(['id', 'name', 'list', 'closed', 'due', 'moves', 'lastMovedAt']));
 
   for await (const chunk of input) {
     const elements = scanner.feed(chunk);
     for (const element of elements) {
       if (!isTrelloCard(element)) continue;
       const list = element.idList === undefined ? '' : listNames.get(element.idList) ?? element.idList;
+      const moves = moveHistory.get(element.id);
       const wroteOk = process.stdout.write(
-        csvRow([element.id, element.name, list, String(element.closed), element.due ?? ''])
+        csvRow([
+          element.id,
+          element.name,
+          list,
+          String(element.closed),
+          element.due ?? '',
+          String(moves?.moves ?? 0),
+          moves?.lastMovedAt ?? '',
+        ])
       );
       if (!wroteOk) {
         await new Promise((resolve) => process.stdout.once('drain', resolve));
