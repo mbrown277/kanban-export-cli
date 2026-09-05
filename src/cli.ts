@@ -3,28 +3,54 @@ import { createReadStream } from 'node:fs';
 import { JsonArrayScanner } from './jsonArrayScanner.js';
 import { csvRow } from './csv.js';
 
+const ALL_FIELDS = ['id', 'name', 'list', 'closed', 'due', 'moves', 'lastMovedAt'] as const;
+type FieldName = (typeof ALL_FIELDS)[number];
+
+function isFieldName(value: string): value is FieldName {
+  return (ALL_FIELDS as readonly string[]).includes(value);
+}
+
 interface CliOptions {
   inputPath: string;
   arrayField: string;
+  fields: FieldName[];
 }
 
 function parseArgs(argv: string[]): CliOptions {
   const positional: string[] = [];
   let arrayField = 'cards';
+  let fields: FieldName[] = [...ALL_FIELDS];
 
   for (const arg of argv) {
     if (arg.startsWith('--array=')) {
       arrayField = arg.slice('--array='.length);
+    } else if (arg.startsWith('--fields=')) {
+      const requested = arg
+        .slice('--fields='.length)
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0);
+      if (requested.length === 0) {
+        throw new Error('--fields requires at least one field name');
+      }
+      for (const name of requested) {
+        if (!isFieldName(name)) {
+          throw new Error(`unknown field "${name}"; valid fields are: ${ALL_FIELDS.join(', ')}`);
+        }
+      }
+      fields = requested as FieldName[];
     } else {
       positional.push(arg);
     }
   }
 
   if (positional.length !== 1) {
-    throw new Error('usage: kanban-export-cli <trello-export.json> [--array=cards]');
+    throw new Error(
+      'usage: kanban-export-cli <trello-export.json> [--array=cards] [--fields=id,name,...]'
+    );
   }
 
-  return { inputPath: positional[0], arrayField };
+  return { inputPath: positional[0], arrayField, fields };
 }
 
 interface TrelloCard {
@@ -146,33 +172,52 @@ async function loadCardMoveHistory(inputPath: string): Promise<Map<string, CardM
   return history;
 }
 
+function fieldValue(
+  fieldName: FieldName,
+  element: TrelloCard,
+  list: string,
+  moves: CardMoveHistory | undefined
+): string {
+  switch (fieldName) {
+    case 'id':
+      return element.id;
+    case 'name':
+      return element.name;
+    case 'list':
+      return list;
+    case 'closed':
+      return String(element.closed);
+    case 'due':
+      return element.due ?? '';
+    case 'moves':
+      return String(moves?.moves ?? 0);
+    case 'lastMovedAt':
+      return moves?.lastMovedAt ?? '';
+  }
+}
+
 async function main(): Promise<void> {
-  const { inputPath, arrayField } = parseArgs(process.argv.slice(2));
-  const listNames = arrayField === 'cards' ? await loadListNames(inputPath) : new Map<string, string>();
-  const moveHistory =
-    arrayField === 'cards' ? await loadCardMoveHistory(inputPath) : new Map<string, CardMoveHistory>();
+  const { inputPath, arrayField, fields } = parseArgs(process.argv.slice(2));
+  // Skip the extra streamed passes entirely when the requested fields don't
+  // need them, rather than doing the work and throwing away the result.
+  const needsListNames = arrayField === 'cards' && fields.includes('list');
+  const needsMoveHistory =
+    arrayField === 'cards' && (fields.includes('moves') || fields.includes('lastMovedAt'));
+  const listNames = needsListNames ? await loadListNames(inputPath) : new Map<string, string>();
+  const moveHistory = needsMoveHistory ? await loadCardMoveHistory(inputPath) : new Map<string, CardMoveHistory>();
   const scanner = new JsonArrayScanner(arrayField);
   const input = createReadStream(inputPath, { encoding: 'utf8' });
 
-  process.stdout.write(csvRow(['id', 'name', 'list', 'closed', 'due', 'moves', 'lastMovedAt']));
+  process.stdout.write(csvRow(fields));
 
   for await (const chunk of input) {
     const elements = scanner.feed(chunk);
     for (const element of elements) {
       if (!isTrelloCard(element)) continue;
-      const list = element.idList === undefined ? '' : listNames.get(element.idList) ?? element.idList;
-      const moves = moveHistory.get(element.id);
-      const wroteOk = process.stdout.write(
-        csvRow([
-          element.id,
-          element.name,
-          list,
-          String(element.closed),
-          element.due ?? '',
-          String(moves?.moves ?? 0),
-          moves?.lastMovedAt ?? '',
-        ])
-      );
+      const list =
+        needsListNames && element.idList !== undefined ? listNames.get(element.idList) ?? element.idList : '';
+      const moves = needsMoveHistory ? moveHistory.get(element.id) : undefined;
+      const wroteOk = process.stdout.write(csvRow(fields.map((field) => fieldValue(field, element, list, moves))));
       if (!wroteOk) {
         await new Promise((resolve) => process.stdout.once('drain', resolve));
       }

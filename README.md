@@ -53,6 +53,18 @@ log) instead of cards:
 node dist/cli.js my-board.json --array=actions > actions.csv
 ```
 
+To pick which columns come out, and in what order, use `--fields` with a
+comma-separated list drawn from `id`, `name`, `list`, `closed`, `due`,
+`moves`, `lastMovedAt`:
+
+```sh
+node dist/cli.js my-board.json --fields=id,name,due > cards-due.csv
+```
+
+Leaving out `list`, `moves`, or `lastMovedAt` skips the streamed pass that
+would have computed it, so `--fields=id,name` runs faster than the default
+since it never reads `lists` or `actions` at all.
+
 Right now only `cards` is mapped to real CSV columns (`id`, `name`, `list`,
 `closed`, `due`, `moves`, `lastMovedAt`); pointing `--array` at anything else
 will scan and parse correctly but won't emit rows for elements that don't
