@@ -98,6 +98,26 @@ tsc
 node dist/cli.js my-board.json > cards.csv
 ```
 
+## Malformed or truncated input
+
+If the export file gets cut off partway through downloading, or is otherwise
+corrupt, the tool distinguishes two failure cases instead of guessing:
+
+- The target array's opening bracket was never seen (the field name doesn't
+  exist in the document, or the file is empty/garbage) — this prints
+  `no array field named "X" was found in ...`.
+- The array's opening bracket was seen but the stream ended before its
+  closing bracket did — this prints `the "X" array in ... was truncated
+  before it closed`, so a half-downloaded export doesn't quietly produce a
+  short CSV with no indication anything was missing.
+
+This same check applies to the internal `lists` and `actions` passes: a
+truncated `lists` or `actions` array aborts the run with an error rather
+than silently resolving only some cards' list names or move history. A
+single array element that isn't valid JSON (bracket-balanced but corrupt
+inside) is reported by field name rather than crashing with a raw parser
+stack trace.
+
 ## Limitations
 
 - Array elements that aren't objects or arrays (bare strings, numbers,

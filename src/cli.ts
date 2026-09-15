@@ -102,6 +102,14 @@ async function loadListNames(inputPath: string): Promise<Map<string, string>> {
     }
   }
 
+  // "lists" not appearing at all is treated as "no list names to resolve"
+  // elsewhere, but if it appeared and then the file ended before its closing
+  // bracket did, the map above is silently missing entries — better to say
+  // so than to hand back list names that only cover part of the board.
+  if (!scanner.done && scanner.foundArray) {
+    throw new Error(`the "lists" array in ${inputPath} was truncated before it closed`);
+  }
+
   return listNames;
 }
 
@@ -169,6 +177,10 @@ async function loadCardMoveHistory(inputPath: string): Promise<Map<string, CardM
     }
   }
 
+  if (!scanner.done && scanner.foundArray) {
+    throw new Error(`the "actions" array in ${inputPath} was truncated before it closed`);
+  }
+
   return history;
 }
 
@@ -229,7 +241,11 @@ async function main(): Promise<void> {
   }
 
   if (!scanner.done) {
-    process.stderr.write(`no array field named "${arrayField}" was found in ${inputPath}\n`);
+    if (scanner.foundArray) {
+      process.stderr.write(`the "${arrayField}" array in ${inputPath} was truncated before it closed\n`);
+    } else {
+      process.stderr.write(`no array field named "${arrayField}" was found in ${inputPath}\n`);
+    }
     process.exitCode = 1;
   }
 }

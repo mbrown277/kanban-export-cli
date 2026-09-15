@@ -12,7 +12,9 @@ function isWhitespace(ch: string): boolean {
  *
  * Feed it chunks of the raw document text in order via `feed()`. Once the
  * target array's closing bracket has been seen, `done` becomes true and the
- * caller can stop reading the rest of the stream.
+ * caller can stop reading the rest of the stream. If the input ends while
+ * `done` is still false, check `foundArray` to tell a field that never
+ * appeared apart from a truncated document that cut the array off midway.
  */
 export class JsonArrayScanner {
   private readonly fieldName: string;
@@ -37,6 +39,11 @@ export class JsonArrayScanner {
   private elementBuf = '';
 
   private finished = false;
+  // Distinct from `finished`: this flips true as soon as the target array's
+  // opening bracket is seen, so callers can tell "field never appeared in
+  // the document" apart from "field appeared but the stream ended before
+  // its closing bracket did" (a truncated export) once feeding stops.
+  private everEnteredArray = false;
 
   constructor(fieldName: string) {
     this.fieldName = fieldName;
@@ -44,6 +51,10 @@ export class JsonArrayScanner {
 
   get done(): boolean {
     return this.finished;
+  }
+
+  get foundArray(): boolean {
+    return this.everEnteredArray;
   }
 
   feed(chunk: string): unknown[] {
@@ -112,6 +123,7 @@ export class JsonArrayScanner {
         if (this.willEnterArray) {
           this.arrayDepth = this.depth;
           this.inTargetArray = true;
+          this.everEnteredArray = true;
           this.willEnterArray = false;
         } else if (this.inTargetArray && !this.capturingElement && this.depth === this.arrayDepth + 1) {
           this.capturingElement = true;
@@ -125,7 +137,12 @@ export class JsonArrayScanner {
         this.depth--;
         if (closingElement) {
           this.capturingElement = false;
-          elements.push(JSON.parse(this.elementBuf));
+          try {
+            elements.push(JSON.parse(this.elementBuf));
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(`malformed element in "${this.fieldName}" array: ${reason}`);
+          }
           this.elementBuf = '';
         }
         if (this.inTargetArray && this.depth === this.arrayDepth - 1) {
